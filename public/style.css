@@ -27,6 +27,27 @@ h2 {
     color: #333;
 }
 
+.helper-text {
+    margin-bottom: 14px;
+    color: #444;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.qr-code {
+    width: 180px;
+    height: 180px;
+    margin-bottom: 12px;
+}
+
+.manual-key {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    font-family: monospace;
+    font-size: 12px;
+}
+
 input {
     width: 100%;
     padding: 10px;
@@ -34,6 +55,14 @@ input {
     border: 1px solid #ccc;
     border-radius: 6px;
     font-size: 14px;
+}
+
+#error {
+    min-height: 18px;
+    margin: 4px 0 10px;
+    color: #d93025;
+    font-size: 13px;
+    text-align: left;
 }
 
 button {

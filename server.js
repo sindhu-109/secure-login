@@ -1,4 +1,5 @@
 const rateLimit = require("express-rate-limit");
+require("dotenv").config();
 const express = require("express");
 const mysql = require("mysql2");
 const bcrypt = require("bcrypt");
@@ -9,6 +10,8 @@ const helmet = require("helmet");
 const csrf = require("csurf");
 const https = require("https");
 const fs = require("fs");
+const speakeasy = require("speakeasy");
+const QRCode = require("qrcode");
 
 
 const app = express();
@@ -18,10 +21,10 @@ app.set("views", path.join(__dirname, "views"));
 
 // Database connection
 const db = mysql.createConnection({
-    host: "localhost",
-    user: "root",
-    password: "Govardhan@2009",
-    database: "secure_app"
+    host: process.env.DB_HOST || "localhost",
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASSWORD || "",
+    database: process.env.DB_NAME || "secure_app"
 });
 
 db.connect(err => {
@@ -34,7 +37,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
 app.use(session({
-    secret: "secureSecretKey",
+    secret: process.env.SESSION_SECRET || "change-this-development-secret",
     resave: false,
     saveUninitialized: false,
    cookie: {
@@ -53,7 +56,13 @@ const loginLimiter = rateLimit({
 });
 
 // Security headers
-app.use(helmet());
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            imgSrc: ["'self'", "data:"]
+        }
+    }
+}));
 
 // CSRF protection
 const csrfProtection = csrf();
@@ -87,6 +96,17 @@ function isValidUsername(username) {
     return username.length >= 3 && username.length <= 30;
 }
 
+function completeLogin(req, res, userId) {
+    req.session.regenerate((err) => {
+        if (err) {
+            return res.send("Session error.");
+        }
+
+        req.session.user = userId;
+        res.redirect("/dashboard");
+    });
+}
+
 
 // Signup
 app.post("/signup", async (req, res) => {
@@ -103,7 +123,7 @@ app.post("/signup", async (req, res) => {
 
     // Server-side validation
     if (!isValidUsername(username)) {
-        return res.send("Username must be 3–30 characters.");
+        return res.send("Username must be 3-30 characters.");
     }
 
     if (!isValidEmail(email)) {
@@ -111,7 +131,7 @@ app.post("/signup", async (req, res) => {
     }
 
     if (!isValidPassword(password)) {
-        return res.send("Password must be 8–50 characters.");
+        return res.send("Password must be 8-50 characters.");
     }
 
     try {
@@ -153,12 +173,138 @@ app.post("/login", loginLimiter, (req, res) => {
         const user = results[0];
         const match = await bcrypt.compare(password, user.password);
 
-        if (match) {
-            req.session.user = user.id;
-            res.redirect("/dashboard");
-        } else {
-            res.send("Invalid login.");
+        if (!match) {
+            return res.send("Invalid login.");
         }
+
+        if (!user.two_factor_enabled) {
+            req.session.pending2FASetupUser = user.id;
+            return res.redirect("/setup-2fa");
+        }
+
+        req.session.pending2FAUser = user.id;
+        res.redirect("/verify-2fa");
+    });
+});
+
+// Set up authenticator app 2FA
+app.get("/setup-2fa", (req, res) => {
+    const userId = req.session.pending2FASetupUser || req.session.user;
+
+    if (!userId) {
+        return res.redirect("/");
+    }
+
+    const sql = "SELECT id, email, two_factor_enabled FROM users WHERE id = ?";
+    db.query(sql, [userId], async (err, results) => {
+        if (err) {
+            console.error("2FA setup database error:", err);
+            return res.send("Database error while setting up 2FA. Make sure the two_factor_secret and two_factor_enabled columns exist.");
+        }
+
+        if (results.length === 0) {
+            return res.send("User not found.");
+        }
+
+        const user = results[0];
+
+        if (user.two_factor_enabled) {
+            return res.redirect("/dashboard");
+        }
+
+        const secret = speakeasy.generateSecret({
+            name: `Secure Login System (${user.email})`
+        });
+
+        req.session.pending2FASecret = secret.base32;
+
+        try {
+            const qrCode = await QRCode.toDataURL(secret.otpauth_url);
+            res.render("setup-2fa", {
+                qrCode,
+                manualKey: secret.base32,
+                csrfToken: req.csrfToken()
+            });
+        } catch (error) {
+            res.send("Could not generate 2FA QR code.");
+        }
+    });
+});
+
+app.post("/setup-2fa", (req, res) => {
+    const userId = req.session.pending2FASetupUser || req.session.user;
+    const secret = req.session.pending2FASecret;
+    const token = req.body.token;
+
+    if (!userId || !secret) {
+        return res.redirect("/");
+    }
+
+    const verified = speakeasy.totp.verify({
+        secret,
+        encoding: "base32",
+        token,
+        window: 1
+    });
+
+    if (!verified) {
+        return res.send("Invalid 2FA code. Go back and try again.");
+    }
+
+    const sql = "UPDATE users SET two_factor_secret = ?, two_factor_enabled = 1 WHERE id = ?";
+    db.query(sql, [secret, userId], (err) => {
+        if (err) {
+            console.error("2FA enable database error:", err);
+            return res.send("Could not enable 2FA.");
+        }
+
+        delete req.session.pending2FASetupUser;
+        delete req.session.pending2FASecret;
+        completeLogin(req, res, userId);
+    });
+});
+
+// Verify authenticator app 2FA during login
+app.get("/verify-2fa", (req, res) => {
+    if (!req.session.pending2FAUser) {
+        return res.redirect("/");
+    }
+
+    res.render("verify-2fa", { csrfToken: req.csrfToken() });
+});
+
+app.post("/verify-2fa", (req, res) => {
+    const userId = req.session.pending2FAUser;
+    const token = req.body.token;
+
+    if (!userId) {
+        return res.redirect("/");
+    }
+
+    const sql = "SELECT two_factor_secret FROM users WHERE id = ?";
+    db.query(sql, [userId], (err, results) => {
+        if (err) {
+            console.error("2FA verification database error:", err);
+            return res.send("Database error while verifying 2FA.");
+        }
+
+        if (results.length === 0) {
+            return res.send("User not found.");
+        }
+
+        const verified = speakeasy.totp.verify({
+            secret: results[0].two_factor_secret,
+            encoding: "base32",
+            token,
+            window: 1
+        });
+
+        if (!verified) {
+            return res.send("Invalid 2FA code.");
+        }
+
+        delete req.session.pending2FAUser;
+        completeLogin(req, res, userId);
     });
 });
 

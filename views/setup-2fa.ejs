@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Set Up 2FA</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <h2>Set Up 2FA</h2>
+        <p class="helper-text">Scan this QR code with Google Authenticator, Microsoft Authenticator, or Authy.</p>
+        <img class="qr-code" src="<%= qrCode %>" alt="2FA QR code">
+        <p class="helper-text">Manual key: <span class="manual-key"><%= manualKey %></span></p>
+        <form action="/setup-2fa" method="POST">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+            <input type="text" name="token" placeholder="6-digit code" maxlength="6" required>
+            <button type="submit">Enable 2FA</button>
+        </form>
+    </div>
+</body>
+</html>

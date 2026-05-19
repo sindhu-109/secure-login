@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verify 2FA</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <h2>Verify 2FA</h2>
+        <p class="helper-text">Enter the 6-digit code from your authenticator app.</p>
+        <form action="/verify-2fa" method="POST">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+            <input type="text" name="token" placeholder="6-digit code" maxlength="6" required>
+            <button type="submit">Verify</button>
+        </form>
+        <a href="/logout">Cancel</a>
+    </div>
+</body>
+</html>
